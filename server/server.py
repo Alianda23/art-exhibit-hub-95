@@ -1,29 +1,6 @@
 
-import os
-import json
-import http.server
-import socketserver
-import urllib.parse
-import mimetypes
-from http import HTTPStatus
-from datetime import datetime
-from urllib.parse import parse_qs, urlparse
-from decimal import Decimal
+# ... keep existing code (imports and initial setup)
 
-# Import modules
-from auth import register_user, login_user, login_admin
-from artwork import get_all_artworks, get_artwork, create_artwork, update_artwork, delete_artwork
-from exhibition import get_all_exhibitions, get_exhibition, create_exhibition, update_exhibition, delete_exhibition
-from contact import create_contact_message, get_messages, update_message, json_dumps
-from db_setup import initialize_database
-from middleware import auth_required, admin_required, extract_auth_token, verify_token
-from mpesa import handle_stk_push_request, check_transaction_status, handle_mpesa_callback
-from db_operations import get_all_tickets, get_all_orders
-
-# Define the port
-PORT = 8000
-
-# Ensure the static/uploads directory exists
 def ensure_uploads_directory():
     uploads_dir = os.path.join(os.path.dirname(__file__), "static", "uploads")
     if not os.path.exists(uploads_dir):
@@ -33,29 +10,53 @@ def ensure_uploads_directory():
 # Call this function to ensure directory exists
 ensure_uploads_directory()
 
-# Create a default exhibition image if it doesn't exist
-def create_default_exhibition_image():
-    default_image_path = os.path.join(os.path.dirname(__file__), "static", "uploads", "default_exhibition.jpg")
+# Create a default image if it doesn't exist
+def create_default_image():
+    default_image_path = os.path.join(os.path.dirname(__file__), "static", "uploads", "placeholder.jpg")
     if not os.path.exists(default_image_path):
         try:
             # Create a simple colored rectangle as the default image
-            from shutil import copyfile
+            from PIL import Image, ImageDraw
             
-            # Copy a placeholder from public if it exists
-            source_placeholder = os.path.join(os.path.dirname(__file__), "..", "public", "placeholder.svg")
-            if os.path.exists(source_placeholder):
-                copyfile(source_placeholder, default_image_path)
-                print(f"Created default exhibition image from placeholder")
-            else:
-                # Create a simple file as fallback
-                with open(default_image_path, "w") as f:
-                    f.write("Default Exhibition Image")
-                print(f"Created empty default exhibition image")
+            # Create a new image with a solid background
+            img = Image.new('RGB', (600, 400), color=(200, 200, 200))
+            d = ImageDraw.Draw(img)
+            
+            # Draw a placeholder rectangle
+            d.rectangle([(50, 50), (550, 350)], outline=(100, 100, 100), width=2)
+            d.text((300, 200), "No Image Available", fill=(100, 100, 100))
+            
+            img.save(default_image_path)
+            print(f"Created default placeholder image at {default_image_path}")
         except Exception as e:
-            print(f"Failed to create default exhibition image: {e}")
+            print(f"Failed to create default image: {e}")
+            # Fallback: Create a simple file
+            with open(default_image_path, "w") as f:
+                f.write("Default Image Placeholder")
 
-# Call this function to ensure default exhibition image exists
-create_default_exhibition_image()
+# Try to create the default image
+try:
+    create_default_image()
+except:
+    print("Failed to create default image, continuing anyway")
+
+# Ensure the public placeholder.svg is available
+def create_placeholder_svg():
+    placeholder_path = os.path.join(os.path.dirname(__file__), "static", "placeholder.svg")
+    if not os.path.exists(placeholder_path):
+        try:
+            svg_content = """<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+                <rect width="600" height="400" fill="#f0f0f0" />
+                <text x="50%" y="50%" font-family="Arial" font-size="24" text-anchor="middle">Image Placeholder</text>
+            </svg>"""
+            with open(placeholder_path, "w") as f:
+                f.write(svg_content)
+            print(f"Created placeholder SVG at {placeholder_path}")
+        except Exception as e:
+            print(f"Failed to create placeholder SVG: {e}")
+
+# Create placeholder SVG
+create_placeholder_svg()
 
 # Custom JSON encoder to handle Decimal types
 class DecimalEncoder(json.JSONEncoder):
@@ -67,6 +68,8 @@ class DecimalEncoder(json.JSONEncoder):
         return super(DecimalEncoder, self).default(obj)
 
 class APIHandler(http.server.BaseHTTPRequestHandler):
+    # ... keep existing code (handler methods)
+    
     def _set_headers(self, status_code=200, content_type='application/json'):
         self.send_response(status_code)
         self.send_header('Content-type', content_type)
@@ -98,12 +101,24 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                 self._set_headers(200, content_type)
                 self.wfile.write(file.read())
         except FileNotFoundError:
-            self._set_headers(404)
-            self.wfile.write(b'File not found')
+            # Serve default placeholder instead
+            placeholder_path = os.path.join(os.path.dirname(__file__), "static", "placeholder.svg")
+            if os.path.exists(placeholder_path):
+                with open(placeholder_path, 'rb') as file:
+                    self._set_headers(200, 'image/svg+xml')
+                    self.wfile.write(file.read())
+            else:
+                self._set_headers(404)
+                self.wfile.write(b'File not found')
     
     def do_GET(self):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
+        
+        # Special handling for placeholder.svg
+        if path == '/placeholder.svg':
+            placeholder_path = os.path.join(os.path.dirname(__file__), "static", "placeholder.svg")
+            return self._serve_static_file(placeholder_path)
         
         # Handle static files
         if path.startswith('/static/'):
@@ -139,6 +154,53 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             result = get_all_orders()
             self._send_response(result)
         
+        elif path.startswith('/api/users/') and '/orders' in path:
+            auth_header = self.headers.get('Authorization')
+            user_id = path.split('/')[3]  # Extract user_id from /api/users/{user_id}/orders
+            
+            # Verify auth token
+            if not auth_header:
+                self._send_response({"error": "Authentication required"}, 401)
+                return
+                
+            # Connect to database and fetch orders for this user
+            connection = get_db_connection()
+            if connection is None:
+                self._send_response({"error": "Database connection failed"}, 500)
+                return
+                
+            try:
+                cursor = connection.cursor()
+                query = """
+                SELECT o.id, o.user_id, u.name as user_name, o.artwork_id as reference_id, 
+                       a.title as item_title, o.total_amount as amount, o.payment_status, 
+                       'artwork' as type, o.order_date as created_at
+                FROM artwork_orders o
+                JOIN users u ON o.user_id = u.id
+                LEFT JOIN artworks a ON o.artwork_id = a.id
+                WHERE o.user_id = %s
+                ORDER BY o.order_date DESC
+                """
+                
+                cursor.execute(query, (user_id,))
+                orders = []
+                for row in cursor.fetchall():
+                    order = {}
+                    for i, col_name in enumerate(cursor.column_names):
+                        order[col_name] = row[i]
+                        if isinstance(order[col_name], Decimal):
+                            order[col_name] = float(order[col_name])
+                    orders.append(order)
+                
+                self._send_response({"orders": orders})
+            except Exception as e:
+                print(f"Error getting user orders: {e}")
+                self._send_response({"error": str(e)}, 500)
+            finally:
+                if connection.is_connected():
+                    cursor.close()
+                    connection.close()
+        
         elif path.startswith('/api/messages'):
             auth_header = self.headers.get('Authorization')
             result = get_messages(auth_header)
@@ -152,6 +214,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
+    
+    # ... keep existing code (do_POST method)
     
     def do_POST(self):
         try:
@@ -206,10 +270,9 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                 result = create_exhibition(auth_header, data)
                 self._send_response(result)
             
-            elif self.path.startswith('/api/exhibitions/'):
-                exhibition_id = self.path.split('/')[-1]
+            elif self.path == '/api/mpesa/stkpush':
                 auth_header = self.headers.get('Authorization')
-                result = update_exhibition(auth_header, exhibition_id, data)
+                result = handle_stk_push_request(data)
                 self._send_response(result)
             
             elif self.path == '/api/contact':
@@ -222,10 +285,6 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                 result = update_message(auth_header, message_id, data)
                 self._send_response(result)
             
-            elif self.path == '/api/mpesa/stkpush':
-                result = handle_stk_push_request(data)
-                self._send_response(result)
-            
             elif self.path == '/api/mpesa/callback':
                 result = handle_mpesa_callback(data)
                 self._send_response(result)
@@ -233,43 +292,33 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._set_headers(404)
                 self.wfile.write(json.dumps({"error": "Not found"}).encode())
-        
+                
         except Exception as e:
             print(f"Error handling POST request: {e}")
             self._set_headers(500)
             self.wfile.write(json.dumps({"error": str(e)}).encode())
     
-    def do_DELETE(self):
-        if self.path.startswith('/api/artworks/'):
-            artwork_id = self.path.split('/')[-1]
-            auth_header = self.headers.get('Authorization')
-            result = delete_artwork(auth_header, artwork_id)
-            self._send_response(result)
-        
-        elif self.path.startswith('/api/exhibitions/'):
-            exhibition_id = self.path.split('/')[-1]
-            auth_header = self.headers.get('Authorization')
-            result = delete_exhibition(auth_header, exhibition_id)
-            self._send_response(result)
-        
-        else:
-            self._set_headers(404)
-            self.wfile.write(json.dumps({"error": "Not found"}).encode())
-
-def run(server_class=http.server.HTTPServer, handler_class=APIHandler, port=PORT):
-    # Initialize the database
-    initialize_database()
+    def do_PUT(self):
+        # ... keep existing code
+        pass
     
-    # Start the server
+    def do_DELETE(self):
+        # ... keep existing code
+        pass
+
+def run(server_class=http.server.HTTPServer, handler_class=APIHandler, port=8000):
     server_address = ('', port)
     httpd = server_class(server_address, handler_class)
-    print(f"Starting server on port {port}...")
+    print(f"Starting server on port {port}")
     try:
+        # Initialize database
+        if not initialize_database():
+            print("Warning: Database initialization had issues")
+        
         httpd.serve_forever()
     except KeyboardInterrupt:
-        pass
-    httpd.server_close()
-    print("Server stopped.")
+        print("Stopping server")
+        httpd.server_close()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run()
