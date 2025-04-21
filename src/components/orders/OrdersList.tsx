@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { OrderSummary } from '@/services/orderService';
-import { formatDate } from '@/lib/utils';
+import { formatCurrency, formatDate } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -52,7 +52,7 @@ const OrdersList = ({ orders, isLoading }: OrdersListProps) => {
               <TableCell className="font-medium">{order.id}</TableCell>
               <TableCell>{order.item_title}</TableCell>
               <TableCell className="capitalize">{order.type}</TableCell>
-              <TableCell>KES {order.amount.toFixed(2)}</TableCell>
+              <TableCell>{formatCurrency(order.amount)}</TableCell>
               <TableCell>{formatDate(order.created_at)}</TableCell>
               <TableCell>{getStatusBadge(order.payment_status)}</TableCell>
             </TableRow>

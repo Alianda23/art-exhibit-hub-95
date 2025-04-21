@@ -1,20 +1,24 @@
 
-from database import get_db_connection, json_dumps
+# M-Pesa API utilities
+
+# M-Pesa credentials
 import os
 import json
 import requests
 import base64
 import datetime
 from decimal import Decimal
+from database import get_db_connection
 
-# MPesa API configuration
-MPESA_CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY', 'your_consumer_key')
-MPESA_CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET', 'your_consumer_secret')
+# M-Pesa API configuration
+CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY', 'sMwMwGZ8oOiSkNrUIrPbcCeWIO8UiQ3SV4CyX739uAyZVs1F')
+CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET', 'A3Hs5zRY3nDCn7XpxPuc1iAKpfy6UDdetiCalIAfuAIpgTROI5yCqqOewDfThh2o')
 MPESA_PASSKEY = os.environ.get('MPESA_PASSKEY', 'your_passkey')
 MPESA_SHORTCODE = os.environ.get('MPESA_SHORTCODE', '174379')  # Default is Safaricom test shortcode
-CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL', 'https://yourdomain.com/api/mpesa/callback')
+CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL', 'https://webhook.site/3c1f62b5-4214-47d6-9f26-71c1f4b9c8f0')
+API_BASE_URL = "https://sandbox.safaricom.co.ke"
 
-# For simulation/testing
+# Function to initiate STK Push
 def initiate_stk_push(phone_number, amount, account_reference, order_type, order_id, user_id):
     """Simulate initiating an STK push"""
     print(f"Initiating STK Push for {phone_number}, amount: {amount}, order: {order_type}-{order_id}")
@@ -31,6 +35,39 @@ def initiate_stk_push(phone_number, amount, account_reference, order_type, order
     cursor = connection.cursor()
     
     try:
+        # First, check if the order exists in the appropriate table
+        if order_type == "artwork":
+            query = """
+            SELECT id, payment_status FROM artwork_orders
+            WHERE id = %s AND user_id = %s
+            """
+        elif order_type == "exhibition":
+            query = """
+            SELECT id, payment_status FROM exhibition_bookings
+            WHERE id = %s AND user_id = %s
+            """
+        else:
+            return {"error": "Invalid order type"}
+            
+        cursor.execute(query, (order_id, user_id))
+        order = cursor.fetchone()
+        
+        if not order:
+            # Create the order if it doesn't exist
+            from db_operations import create_order, create_ticket
+            
+            if order_type == "artwork":
+                result = create_order(user_id, order_type, order_id, amount)
+                if "error" in result:
+                    return result
+            elif order_type == "exhibition":
+                # For exhibition, we assume slots = 1 if not specified
+                slots = 1
+                result = create_ticket(user_id, order_id, slots)
+                if "error" in result:
+                    return result
+        
+        # Insert MPesa transaction record
         query = """
         INSERT INTO mpesa_transactions 
         (checkout_request_id, merchant_request_id, order_type, order_id, user_id, amount, phone_number, status)

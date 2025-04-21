@@ -165,11 +165,11 @@ def get_all_tickets():
         # Get all exhibition bookings
         query = """
         SELECT b.id, b.user_id, u.name as user_name, b.exhibition_id, e.title as exhibition_title,
-               b.ticket_code, b.slots, b.booking_date, b.payment_status as status, b.total_amount
+               e.image_url as exhibition_image_url, b.ticket_code, b.slots, 
+               b.booking_date, b.payment_status as status, b.total_amount
         FROM exhibition_bookings b
         JOIN users u ON b.user_id = u.id
         JOIN exhibitions e ON b.exhibition_id = e.id
-        WHERE b.payment_status = 'completed'
         ORDER BY b.booking_date DESC
         """
         cursor.execute(query)
@@ -187,6 +187,71 @@ def get_all_tickets():
         return {"tickets": json.loads(tickets_json)}
     except Exception as e:
         print(f"Error getting tickets: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def get_user_orders(user_id):
+    """Get all orders and bookings for a specific user"""
+    connection = get_db_connection()
+    if connection is None:
+        return {"error": "Database connection failed"}
+    
+    cursor = connection.cursor()
+    
+    try:
+        # Get artwork orders
+        artwork_query = """
+        SELECT o.id, o.user_id, o.artwork_id as reference_id, 
+               a.title as item_title, o.total_amount as amount, o.payment_status, 
+               'artwork' as type, o.order_date as created_at
+        FROM artwork_orders o
+        LEFT JOIN artworks a ON o.artwork_id = a.id
+        WHERE o.user_id = %s
+        ORDER BY o.order_date DESC
+        """
+        cursor.execute(artwork_query, (user_id,))
+        artwork_orders = []
+        for row in cursor.fetchall():
+            order = {}
+            for i, col_name in enumerate(cursor.column_names):
+                order[col_name] = row[i]
+                if isinstance(order[col_name], Decimal):
+                    order[col_name] = float(order[col_name])
+            artwork_orders.append(order)
+        
+        # Get exhibition bookings
+        exhibition_query = """
+        SELECT b.id, b.user_id, b.exhibition_id as reference_id, 
+               e.title as item_title, b.total_amount as amount, b.payment_status, 
+               'exhibition' as type, b.booking_date as created_at
+        FROM exhibition_bookings b
+        LEFT JOIN exhibitions e ON b.exhibition_id = e.id
+        WHERE b.user_id = %s
+        ORDER BY b.booking_date DESC
+        """
+        cursor.execute(exhibition_query, (user_id,))
+        exhibition_bookings = []
+        for row in cursor.fetchall():
+            booking = {}
+            for i, col_name in enumerate(cursor.column_names):
+                booking[col_name] = row[i]
+                if isinstance(booking[col_name], Decimal):
+                    booking[col_name] = float(booking[col_name])
+            exhibition_bookings.append(booking)
+        
+        # Convert to JSON and back to handle Decimal types
+        orders_json = json.dumps(artwork_orders, cls=DecimalEncoder)
+        bookings_json = json.dumps(exhibition_bookings, cls=DecimalEncoder)
+        
+        return {
+            "orders": json.loads(orders_json),
+            "bookings": json.loads(bookings_json)
+        }
+    except Exception as e:
+        print(f"Error getting user orders: {e}")
         return {"error": str(e)}
     finally:
         if connection.is_connected():
