@@ -1,4 +1,193 @@
 
+from database import get_db_connection, json_dumps
+import os
+import json
+import requests
+import base64
+import datetime
+from decimal import Decimal
+
+# MPesa API configuration
+MPESA_CONSUMER_KEY = os.environ.get('MPESA_CONSUMER_KEY', 'your_consumer_key')
+MPESA_CONSUMER_SECRET = os.environ.get('MPESA_CONSUMER_SECRET', 'your_consumer_secret')
+MPESA_PASSKEY = os.environ.get('MPESA_PASSKEY', 'your_passkey')
+MPESA_SHORTCODE = os.environ.get('MPESA_SHORTCODE', '174379')  # Default is Safaricom test shortcode
+CALLBACK_URL = os.environ.get('MPESA_CALLBACK_URL', 'https://yourdomain.com/api/mpesa/callback')
+
+# For simulation/testing
+def initiate_stk_push(phone_number, amount, account_reference, order_type, order_id, user_id):
+    """Simulate initiating an STK push"""
+    print(f"Initiating STK Push for {phone_number}, amount: {amount}, order: {order_type}-{order_id}")
+    
+    # Generate unique transaction ID for this request
+    checkout_request_id = f"ws_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{order_id}"
+    merchant_request_id = f"mr_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{order_id}"
+    
+    # Save the transaction details to the database
+    connection = get_db_connection()
+    if connection is None:
+        return {"error": "Database connection failed"}
+    
+    cursor = connection.cursor()
+    
+    try:
+        query = """
+        INSERT INTO mpesa_transactions 
+        (checkout_request_id, merchant_request_id, order_type, order_id, user_id, amount, phone_number, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
+        """
+        cursor.execute(query, (
+            checkout_request_id,
+            merchant_request_id,
+            order_type,
+            order_id,
+            user_id,
+            amount,
+            phone_number
+        ))
+        connection.commit()
+        
+        # For demonstration/development, simulate successful transaction
+        # In production, this would be handled by the MPesa callback
+        if True:  # Always succeed in demo
+            # Simulate a successful payment after a short delay
+            # In production, this would be handled by the callback
+            update_order_status(order_type, order_id, "completed")
+            
+            # Update the transaction status
+            query = """
+            UPDATE mpesa_transactions
+            SET status = 'completed', result_code = '0', result_desc = 'Success'
+            WHERE checkout_request_id = %s
+            """
+            cursor.execute(query, (checkout_request_id,))
+            connection.commit()
+        
+        return {
+            "success": True,
+            "checkout_request_id": checkout_request_id,
+            "merchant_request_id": merchant_request_id,
+            "phone_number": phone_number,
+            "amount": amount
+        }
+    except Exception as e:
+        print(f"Error initiating STK push: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def check_transaction_status(checkout_request_id):
+    """Check the status of an MPesa transaction"""
+    connection = get_db_connection()
+    if connection is None:
+        return {"error": "Database connection failed"}
+    
+    cursor = connection.cursor()
+    
+    try:
+        query = """
+        SELECT status, result_code, result_desc, order_type, order_id
+        FROM mpesa_transactions
+        WHERE checkout_request_id = %s
+        """
+        cursor.execute(query, (checkout_request_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            return {"error": "Transaction not found"}
+        
+        status, result_code, result_desc, order_type, order_id = result
+        
+        return {
+            "success": True,
+            "checkout_request_id": checkout_request_id,
+            "status": status,
+            "result_code": result_code,
+            "result_desc": result_desc,
+            "order_type": order_type,
+            "order_id": order_id
+        }
+    except Exception as e:
+        print(f"Error checking transaction status: {e}")
+        return {"error": str(e)}
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def handle_mpesa_callback(callback_data):
+    """Handle callback from MPesa API"""
+    print(f"MPesa callback received: {callback_data}")
+    
+    try:
+        # Extract transaction details from callback
+        body = callback_data.get("Body", {})
+        stkCallback = body.get("stkCallback", {})
+        
+        checkout_request_id = stkCallback.get("CheckoutRequestID")
+        merchant_request_id = stkCallback.get("MerchantRequestID")
+        result_code = stkCallback.get("ResultCode")
+        result_desc = stkCallback.get("ResultDesc")
+        
+        # Get transaction details from database
+        connection = get_db_connection()
+        if connection is None:
+            return {"error": "Database connection failed"}
+        
+        cursor = connection.cursor()
+        
+        try:
+            # Get transaction details
+            query = """
+            SELECT order_type, order_id, status
+            FROM mpesa_transactions
+            WHERE checkout_request_id = %s
+            """
+            cursor.execute(query, (checkout_request_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return {"error": "Transaction not found"}
+            
+            order_type, order_id, current_status = result
+            
+            # If transaction is already completed, just return success
+            if current_status == 'completed':
+                return {"success": True, "message": "Transaction already processed"}
+            
+            # Update transaction status based on result code
+            status = 'completed' if result_code == '0' else 'failed'
+            
+            query = """
+            UPDATE mpesa_transactions
+            SET status = %s, result_code = %s, result_desc = %s
+            WHERE checkout_request_id = %s
+            """
+            cursor.execute(query, (status, result_code, result_desc, checkout_request_id))
+            connection.commit()
+            
+            # If payment was successful, update order status
+            if result_code == '0':
+                update_order_status(order_type, order_id, "completed")
+            
+            return {
+                "success": True,
+                "checkout_request_id": checkout_request_id,
+                "status": status
+            }
+        except Exception as e:
+            print(f"Error processing MPesa callback: {e}")
+            return {"error": str(e)}
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    except Exception as e:
+        print(f"Error handling MPesa callback: {e}")
+        return {"error": str(e)}
+
 # We need to modify the update_order_status function to use the correct tables
 def update_order_status(order_type, order_id, payment_status):
     """Update order payment status in database"""
@@ -50,7 +239,7 @@ def update_order_status(order_type, order_id, payment_status):
             connection.commit()
         
         return True
-    except Error as e:
+    except Exception as e:
         print(f"Error updating order: {e}")
         return False
     finally:
