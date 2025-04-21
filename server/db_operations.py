@@ -1,7 +1,9 @@
+
 from database import get_db_connection
 from decimal import Decimal
 import random
 import string
+import json
 
 def generate_ticket_code():
     """Generate a unique ticket code"""
@@ -9,10 +11,15 @@ def generate_ticket_code():
     random_chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     return f"{prefix}-{random_chars}"
 
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super(DecimalEncoder, self).default(obj)
+
 def create_order(user_id, order_type, reference_id, amount):
-    """Create a new order in the database"""
-    # Remove the restriction on order_type since we want to allow both artwork and exhibition
-    
+    """Create a new order in the database - uses the appropriate order table based on type"""
     connection = get_db_connection()
     if connection is None:
         return {"error": "Database connection failed"}
@@ -20,36 +27,28 @@ def create_order(user_id, order_type, reference_id, amount):
     cursor = connection.cursor()
     
     try:
-        # Check if orders table exists
-        cursor.execute("SHOW TABLES LIKE 'orders'")
-        if not cursor.fetchone():
-            print("Orders table does not exist. Creating it now...")
-            # Create orders table if it doesn't exist
-            orders_table = """
-            CREATE TABLE IF NOT EXISTS orders (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id INT NOT NULL,
-                type ENUM('artwork', 'exhibition') NOT NULL,
-                reference_id INT NOT NULL,
-                amount DECIMAL(10, 2) NOT NULL,
-                status ENUM('pending', 'completed', 'cancelled') NOT NULL DEFAULT 'pending',
-                payment_method VARCHAR(50),
-                payment_status ENUM('pending', 'completed', 'failed') NOT NULL DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+        # Use the appropriate table based on order type
+        if order_type == 'artwork':
+            query = """
+            INSERT INTO artwork_orders (user_id, artwork_id, amount, name, email, phone, delivery_address, payment_method, payment_status)
+            SELECT %s, %s, %s, u.name, u.email, u.phone, '', 'mpesa', 'pending'
+            FROM users u WHERE u.id = %s
             """
-            cursor.execute(orders_table)
-            connection.commit()
-        
-        query = """
-        INSERT INTO orders (user_id, type, reference_id, amount)
-        VALUES (%s, %s, %s, %s)
-        """
-        cursor.execute(query, (user_id, order_type, reference_id, amount))
+            cursor.execute(query, (user_id, reference_id, amount, user_id))
+            order_id = cursor.lastrowid
+        elif order_type == 'exhibition':
+            query = """
+            INSERT INTO exhibition_bookings (user_id, exhibition_id, slots, name, email, phone, payment_method, payment_status, total_amount)
+            SELECT %s, %s, 1, u.name, u.email, u.phone, 'mpesa', 'pending', %s
+            FROM users u WHERE u.id = %s
+            """
+            cursor.execute(query, (user_id, reference_id, amount, user_id))
+            order_id = cursor.lastrowid
+        else:
+            return {"error": "Invalid order type"}
+            
         connection.commit()
         
-        order_id = cursor.lastrowid
         return {"success": True, "order_id": order_id}
     except Exception as e:
         print(f"Error creating order: {e}")
@@ -60,7 +59,7 @@ def create_order(user_id, order_type, reference_id, amount):
             connection.close()
 
 def create_ticket(user_id, exhibition_id, slots):
-    """Create a new ticket in the database"""
+    """Create a new ticket in the exhibition_bookings table"""
     connection = get_db_connection()
     if connection is None:
         return {"error": "Database connection failed"}
@@ -68,37 +67,44 @@ def create_ticket(user_id, exhibition_id, slots):
     cursor = connection.cursor()
     
     try:
-        # Check if tickets table exists
-        cursor.execute("SHOW TABLES LIKE 'tickets'")
-        if not cursor.fetchone():
-            print("Tickets table does not exist. Creating it now...")
-            # Create tickets table if it doesn't exist
-            tickets_table = """
-            CREATE TABLE IF NOT EXISTS tickets (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id INT NOT NULL,
-                exhibition_id INT NOT NULL,
-                ticket_code VARCHAR(50) NOT NULL UNIQUE,
-                slots INT NOT NULL,
-                status ENUM('active', 'used', 'cancelled') NOT NULL DEFAULT 'active',
-                booking_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (exhibition_id) REFERENCES exhibitions(id)
-            );
-            """
-            cursor.execute(tickets_table)
-            connection.commit()
-        
-        ticket_code = generate_ticket_code()
+        # Check if the booking exists
         query = """
-        INSERT INTO tickets (user_id, exhibition_id, ticket_code, slots)
-        VALUES (%s, %s, %s, %s)
+        SELECT id, ticket_code FROM exhibition_bookings
+        WHERE user_id = %s AND exhibition_id = %s AND payment_status = 'completed'
         """
-        cursor.execute(query, (user_id, exhibition_id, ticket_code, slots))
+        cursor.execute(query, (user_id, exhibition_id))
+        existing_booking = cursor.fetchone()
+        
+        if existing_booking:
+            booking_id = existing_booking[0]
+            ticket_code = existing_booking[1]
+        else:
+            # Generate a ticket code
+            ticket_code = generate_ticket_code()
+            
+            # Update existing booking with ticket code if pending payment
+            query = """
+            UPDATE exhibition_bookings 
+            SET ticket_code = %s
+            WHERE user_id = %s AND exhibition_id = %s AND ticket_code IS NULL
+            """
+            cursor.execute(query, (ticket_code, user_id, exhibition_id))
+            
+            if cursor.rowcount == 0:
+                # Create a new booking record
+                query = """
+                INSERT INTO exhibition_bookings (user_id, exhibition_id, slots, ticket_code, name, email, phone, payment_method, payment_status, total_amount)
+                SELECT %s, %s, %s, %s, name, email, phone, 'mpesa', 'pending', 
+                (SELECT ticket_price FROM exhibitions WHERE id = %s) * %s
+                FROM users WHERE id = %s
+                """
+                cursor.execute(query, (user_id, exhibition_id, slots, ticket_code, exhibition_id, slots, user_id))
+                
+            booking_id = cursor.lastrowid
+            
         connection.commit()
         
-        ticket_id = cursor.lastrowid
-        return {"success": True, "ticket_id": ticket_id, "ticket_code": ticket_code}
+        return {"success": True, "booking_id": booking_id, "ticket_code": ticket_code}
     except Exception as e:
         print(f"Error creating ticket: {e}")
         return {"error": str(e)}
@@ -108,7 +114,7 @@ def create_ticket(user_id, exhibition_id, slots):
             connection.close()
 
 def get_all_orders():
-    """Get all orders from database"""
+    """Get all artwork orders from the database"""
     connection = get_db_connection()
     if connection is None:
         return {"error": "Database connection failed"}
@@ -116,27 +122,29 @@ def get_all_orders():
     cursor = connection.cursor()
     
     try:
-        # Check if table exists before querying
-        cursor.execute("SHOW TABLES LIKE 'orders'")
-        if not cursor.fetchone():
-            print("Orders table doesn't exist")
-            return {"orders": []}
-        
+        # Get all artwork orders
         query = """
-        SELECT o.*, u.name as user_name,
-               CASE 
-                   WHEN o.type = 'artwork' THEN a.title
-                   WHEN o.type = 'exhibition' THEN e.title
-               END as item_title
-        FROM orders o
+        SELECT o.id, o.user_id, u.name as user_name, o.artwork_id as reference_id, 
+               a.title as item_title, o.total_amount as amount, o.payment_status, 
+               'artwork' as type, o.order_date as created_at
+        FROM artwork_orders o
         JOIN users u ON o.user_id = u.id
-        LEFT JOIN artworks a ON o.type = 'artwork' AND o.reference_id = a.id
-        LEFT JOIN exhibitions e ON o.type = 'exhibition' AND o.reference_id = e.id
-        ORDER BY o.created_at DESC
+        LEFT JOIN artworks a ON o.artwork_id = a.id
+        ORDER BY o.order_date DESC
         """
         cursor.execute(query)
-        orders = [dict(zip([col[0] for col in cursor.description], row)) for row in cursor.fetchall()]
-        return {"orders": orders}
+        orders = []
+        for row in cursor.fetchall():
+            order = {}
+            for i, col_name in enumerate(cursor.column_names):
+                order[col_name] = row[i]
+                if isinstance(order[col_name], Decimal):
+                    order[col_name] = float(order[col_name])
+            orders.append(order)
+        
+        # Convert to JSON and back to handle Decimal types
+        orders_json = json.dumps(orders, cls=DecimalEncoder)
+        return {"orders": json.loads(orders_json)}
     except Exception as e:
         print(f"Error getting orders: {e}")
         return {"error": str(e)}
@@ -146,7 +154,7 @@ def get_all_orders():
             connection.close()
 
 def get_all_tickets():
-    """Get all tickets from database"""
+    """Get all exhibition bookings (tickets) from database"""
     connection = get_db_connection()
     if connection is None:
         return {"error": "Database connection failed"}
@@ -154,22 +162,29 @@ def get_all_tickets():
     cursor = connection.cursor()
     
     try:
-        # Check if table exists before querying
-        cursor.execute("SHOW TABLES LIKE 'tickets'")
-        if not cursor.fetchone():
-            print("Tickets table doesn't exist")
-            return {"tickets": []}
-        
+        # Get all exhibition bookings
         query = """
-        SELECT t.*, u.name as user_name, e.title as exhibition_title
-        FROM tickets t
-        JOIN users u ON t.user_id = u.id
-        JOIN exhibitions e ON t.exhibition_id = e.id
-        ORDER BY t.booking_date DESC
+        SELECT b.id, b.user_id, u.name as user_name, b.exhibition_id, e.title as exhibition_title,
+               b.ticket_code, b.slots, b.booking_date, b.payment_status as status, b.total_amount
+        FROM exhibition_bookings b
+        JOIN users u ON b.user_id = u.id
+        JOIN exhibitions e ON b.exhibition_id = e.id
+        WHERE b.payment_status = 'completed'
+        ORDER BY b.booking_date DESC
         """
         cursor.execute(query)
-        tickets = [dict(zip([col[0] for col in cursor.description], row)) for row in cursor.fetchall()]
-        return {"tickets": tickets}
+        tickets = []
+        for row in cursor.fetchall():
+            ticket = {}
+            for i, col_name in enumerate(cursor.column_names):
+                ticket[col_name] = row[i]
+                if isinstance(ticket[col_name], Decimal):
+                    ticket[col_name] = float(ticket[col_name])
+            tickets.append(ticket)
+        
+        # Convert to JSON and back to handle Decimal types
+        tickets_json = json.dumps(tickets, cls=DecimalEncoder)
+        return {"tickets": json.loads(tickets_json)}
     except Exception as e:
         print(f"Error getting tickets: {e}")
         return {"error": str(e)}
