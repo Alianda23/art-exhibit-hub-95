@@ -7,13 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [serverError, setServerError] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -21,6 +22,7 @@ const Login = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setServerError(false);
     
     if (!email || !password) {
       setError("Please enter both email and password");
@@ -57,9 +59,10 @@ const Login = () => {
     } catch (error) {
       console.error("Login error:", error);
       setError("Connection error. Please try again later.");
+      setServerError(true);
       toast({
         title: "Connection Error",
-        description: "Could not reach the server. Please check if the server is running.",
+        description: "Could not reach the server. Please make sure the server is running at http://localhost:8000",
         variant: "destructive",
       });
     } finally {
@@ -77,6 +80,18 @@ const Login = () => {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {serverError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-start">
+              <AlertTriangle className="h-5 w-5 text-red-500 mr-2 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-red-800">Server Connection Error</p>
+                <p className="text-xs text-red-700 mt-1">
+                  Cannot connect to the server at http://localhost:8000. Please ensure the server is running.
+                </p>
+              </div>
+            </div>
+          )}
+          
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
@@ -105,7 +120,7 @@ const Login = () => {
                 disabled={loading}
               />
             </div>
-            {error && (
+            {error && !serverError && (
               <div className="text-red-500 text-sm py-2">{error}</div>
             )}
             <Button 

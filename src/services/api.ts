@@ -1,8 +1,7 @@
-
 // API service to connect to the Python backend
 
 // Base URL for the API
-const API_URL = 'http://localhost:8000';
+const API_URL = 'http://localhost:8000/api';
 
 // Interface for auth responses
 interface AuthResponse {
@@ -351,9 +350,11 @@ export const getAllArtworks = async () => {
   try {
     const response = await fetch(`${API_URL}/artworks`);
     if (!response.ok) {
+      console.error(`Failed to fetch artworks: Status ${response.status}`);
       throw new Error('Failed to fetch artworks');
     }
     const data = await response.json();
+    console.log('Artworks data:', data);
     return data.artworks || [];
   } catch (error) {
     console.error('Error fetching artworks:', error);
@@ -380,9 +381,11 @@ export const getAllExhibitions = async () => {
   try {
     const response = await fetch(`${API_URL}/exhibitions`);
     if (!response.ok) {
+      console.error(`Failed to fetch exhibitions: Status ${response.status}`);
       throw new Error('Failed to fetch exhibitions');
     }
     const data = await response.json();
+    console.log('Exhibitions data:', data);
     return data.exhibitions || [];
   } catch (error) {
     console.error('Error fetching exhibitions:', error);
