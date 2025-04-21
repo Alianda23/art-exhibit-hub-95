@@ -144,7 +144,7 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
             result = get_messages(auth_header)
             self._send_response(result)
         
-        elif path.startswith('/api/transaction-status/'):
+        elif path.startswith('/api/mpesa/status/'):
             checkout_request_id = path.split('/')[-1]
             result = check_transaction_status(checkout_request_id)
             self._send_response(result)

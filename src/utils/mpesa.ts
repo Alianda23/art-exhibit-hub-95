@@ -55,7 +55,7 @@ export const initiateSTKPush = async (
     
     console.log('STK Push request body:', requestBody);
     
-    const response = await fetch(`${API_URL}/mpesa/stk-push`, {
+    const response = await fetch(`${API_URL}/mpesa/stkpush`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
