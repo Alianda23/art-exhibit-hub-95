@@ -30,7 +30,7 @@ def create_order(user_id, order_type, reference_id, amount):
         # Use the appropriate table based on order type
         if order_type == 'artwork':
             query = """
-            INSERT INTO artwork_orders (user_id, artwork_id, amount, name, email, phone, delivery_address, payment_method, payment_status)
+            INSERT INTO artwork_orders (user_id, artwork_id, total_amount, name, email, phone, delivery_address, payment_method, payment_status)
             SELECT %s, %s, %s, u.name, u.email, u.phone, '', 'mpesa', 'pending'
             FROM users u WHERE u.id = %s
             """
