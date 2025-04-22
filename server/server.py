@@ -1,3 +1,4 @@
+
 import os
 import http.server
 import json
@@ -382,14 +383,7 @@ def get_all_orders():
             LEFT JOIN artworks a ON o.artwork_id = a.id
             ORDER BY o.order_date DESC
         """)
-        artwork_orders = []
-        for row in cursor.fetchall():
-            order = {}
-            for i, col_name in enumerate(cursor.column_names):
-                order[col_name] = row[i]
-                if isinstance(order[col_name], Decimal):
-                    order[col_name] = float(order[col_name])
-            artwork_orders.append(order)
+        artwork_orders = [dict(row) for row in cursor.fetchall()]
         
         # Fetch exhibition bookings
         cursor.execute("""
@@ -401,22 +395,14 @@ def get_all_orders():
             LEFT JOIN exhibitions e ON b.exhibition_id = e.id
             ORDER BY b.booking_date DESC
         """)
-        exhibition_bookings = []
-        for row in cursor.fetchall():
-            booking = {}
-            for i, col_name in enumerate(cursor.column_names):
-                booking[col_name] = row[i]
-                if isinstance(booking[col_name], Decimal):
-                    booking[col_name] = float(booking[col_name])
-            exhibition_bookings.append(booking)
+        exhibition_bookings = [dict(row) for row in cursor.fetchall()]
         
         return {"orders": artwork_orders, "bookings": exhibition_bookings}, 200
     except Exception as e:
         print(f"Error getting all orders: {e}")
         return {"error": str(e)}, 500
     finally:
-        if conn.is_connected():
-            cursor.close()
+        if conn:
             conn.close()
 
 # --- Contact Messages ---
@@ -529,8 +515,8 @@ def create_default_image():
 # Try to create the default image
 try:
     create_default_image()
-except:
-    print("Failed to create default image, continuing anyway")
+except Exception as e:
+    print(f"Failed to create default image: {e}, continuing anyway")
 
 # Ensure the public placeholder.svg is available
 def create_placeholder_svg():
@@ -617,32 +603,32 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         
         # Handle API endpoints
         if path == '/api/artworks':
-            result = get_all_artworks()
-            self._send_response(result)
+            result, status_code = get_all_artworks()
+            self._send_response(result, status_code)
         
         elif path.startswith('/api/artworks/'):
             artwork_id = path.split('/')[-1]
-            result = get_artwork(artwork_id)
-            self._send_response(result)
+            result, status_code = get_artwork(artwork_id)
+            self._send_response(result, status_code)
         
         elif path == '/api/exhibitions':
-            result = get_all_exhibitions()
-            self._send_response(result)
+            result, status_code = get_all_exhibitions()
+            self._send_response(result, status_code)
         
         elif path.startswith('/api/exhibitions/'):
             exhibition_id = path.split('/')[-1]
-            result = get_exhibition(exhibition_id)
-            self._send_response(result)
+            result, status_code = get_exhibition(exhibition_id)
+            self._send_response(result, status_code)
         
         elif path == '/api/tickets':
             auth_header = self.headers.get('Authorization')
-            result = get_all_tickets()
-            self._send_response(result)
+            result, status_code = get_all_tickets()
+            self._send_response(result, status_code)
         
         elif path == '/api/orders':
             auth_header = self.headers.get('Authorization')
-            result = get_all_orders()
-            self._send_response(result)
+            result, status_code = get_all_orders()
+            self._send_response(result, status_code)
         
         elif path.startswith('/api/users/') and '/orders' in path:
             auth_header = self.headers.get('Authorization')
@@ -661,45 +647,56 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                 
             try:
                 cursor = connection.cursor()
-                query = """
-                SELECT o.id, o.user_id, u.name as user_name, o.artwork_id as reference_id, 
-                       a.title as item_title, o.total_amount as amount, o.payment_status, 
-                       'artwork' as type, o.order_date as created_at
-                FROM artwork_orders o
-                JOIN users u ON o.user_id = u.id
-                LEFT JOIN artworks a ON o.artwork_id = a.id
-                WHERE o.user_id = %s
-                ORDER BY o.order_date DESC
-                """
+                # Get artwork orders for the user
+                cursor.execute("""
+                    SELECT o.id, o.user_id, u.name as user_name, o.artwork_id as reference_id, 
+                        a.title as item_title, o.total_amount as amount, o.payment_status, 
+                        'artwork' as type, o.order_date as created_at
+                    FROM artwork_orders o
+                    JOIN users u ON o.user_id = u.id
+                    LEFT JOIN artworks a ON o.artwork_id = a.id
+                    WHERE o.user_id = ?
+                    ORDER BY o.order_date DESC
+                """, (user_id,))
                 
-                cursor.execute(query, (user_id,))
-                orders = []
-                for row in cursor.fetchall():
-                    order = {}
-                    for i, col_name in enumerate(cursor.column_names):
-                        order[col_name] = row[i]
-                        if isinstance(order[col_name], Decimal):
-                            order[col_name] = float(order[col_name])
-                    orders.append(order)
+                orders = [dict(row) for row in cursor.fetchall()]
                 
-                self._send_response({"orders": orders})
+                # Get exhibition bookings for the user
+                cursor.execute("""
+                    SELECT b.id, b.user_id, u.name as user_name, b.exhibition_id as reference_id, 
+                        e.title as item_title, b.total_amount as amount, b.status as payment_status, 
+                        'exhibition' as type, b.booking_date as created_at
+                    FROM exhibition_bookings b
+                    JOIN users u ON b.user_id = u.id
+                    LEFT JOIN exhibitions e ON b.exhibition_id = e.id
+                    WHERE b.user_id = ?
+                    ORDER BY b.booking_date DESC
+                """, (user_id,))
+                
+                bookings = [dict(row) for row in cursor.fetchall()]
+                
+                # Combine both results
+                all_orders = orders + bookings
+                
+                # Sort by date (newest first)
+                all_orders.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+                
+                self._send_response({"orders": all_orders})
             except Exception as e:
                 print(f"Error getting user orders: {e}")
                 self._send_response({"error": str(e)}, 500)
             finally:
-                if connection.is_connected():
-                    cursor.close()
-                    connection.close()
+                connection.close()
         
         elif path.startswith('/api/messages'):
             auth_header = self.headers.get('Authorization')
-            result = get_messages(auth_header)
-            self._send_response(result)
+            result, status_code = get_messages(auth_header)
+            self._send_response(result, status_code)
         
         elif path.startswith('/api/mpesa/status/'):
             checkout_request_id = path.split('/')[-1]
-            result = check_transaction_status(checkout_request_id)
-            self._send_response(result)
+            result, status_code = check_transaction_status(checkout_request_id)
+            self._send_response(result, status_code)
         
         else:
             self._set_headers(404)
@@ -720,62 +717,62 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
                         data[key] = data[key][0]
             
             if self.path == '/api/register':
-                result = register_user(
+                result, status_code = register_user(
                     data.get('name'),
                     data.get('email'),
                     data.get('password'),
                     data.get('phone', '')
                 )
-                self._send_response(result)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/login':
-                result = login_user(
+                result, status_code = login_user(
                     data.get('email'),
                     data.get('password')
                 )
-                self._send_response(result)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/admin-login':
-                result = login_admin(
+                result, status_code = login_admin(
                     data.get('email'),
                     data.get('password')
                 )
-                self._send_response(result)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/artworks':
                 auth_header = self.headers.get('Authorization')
-                result = create_artwork(auth_header, data)
-                self._send_response(result)
+                result, status_code = create_artwork(auth_header, data)
+                self._send_response(result, status_code)
             
             elif self.path.startswith('/api/artworks/'):
                 artwork_id = self.path.split('/')[-1]
                 auth_header = self.headers.get('Authorization')
-                result = update_artwork(auth_header, artwork_id, data)
-                self._send_response(result)
+                result, status_code = update_artwork(auth_header, artwork_id, data)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/exhibitions':
                 auth_header = self.headers.get('Authorization')
-                result = create_exhibition(auth_header, data)
-                self._send_response(result)
+                result, status_code = create_exhibition(auth_header, data)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/mpesa/stkpush':
                 auth_header = self.headers.get('Authorization')
-                result = handle_stk_push_request(data)
-                self._send_response(result)
+                result, status_code = handle_stk_push_request(data)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/contact':
-                result = create_contact_message(data)
-                self._send_response(result)
+                result, status_code = create_contact_message(data)
+                self._send_response(result, status_code)
             
             elif self.path.startswith('/api/messages/'):
                 message_id = self.path.split('/')[-1]
                 auth_header = self.headers.get('Authorization')
-                result = update_message(auth_header, message_id, data)
-                self._send_response(result)
+                result, status_code = update_message(auth_header, message_id, data)
+                self._send_response(result, status_code)
             
             elif self.path == '/api/mpesa/callback':
-                result = handle_mpesa_callback(data)
-                self._send_response(result)
+                result, status_code = handle_mpesa_callback(data)
+                self._send_response(result, status_code)
             
             else:
                 self._set_headers(404)
@@ -797,8 +794,8 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith('/api/artworks/'):
             artwork_id = path.split('/')[-1]
             auth_header = self.headers.get('Authorization')
-            result = update_artwork(auth_header, artwork_id, data)
-            self._send_response(result)
+            result, status_code = update_artwork(auth_header, artwork_id, data)
+            self._send_response(result, status_code)
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
@@ -835,3 +832,16 @@ class APIHandler(http.server.BaseHTTPRequestHandler):
 
 def run(server_class=http.server.HTTPServer, handler_class=APIHandler, port=8000):
     server_address = ('', port)
+    httpd = server_class(server_address, handler_class)
+    print(f"Starting server on port {port}...")
+    try:
+        initialize_database()  # Initialize the database on server startup
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("Server stopped.")
+    except Exception as e:
+        print(f"Server error: {e}")
+
+# This is the main entry point for the script
+if __name__ == "__main__":
+    run()
