@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, Info } from "lucide-react";
 
 const AdminLogin = () => {
   const [email, setEmail] = useState("");
@@ -91,6 +91,16 @@ const AdminLogin = () => {
               </div>
             </div>
           )}
+          
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md flex items-start">
+            <Info className="h-5 w-5 text-blue-500 mr-2 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-blue-800">Demo Admin Login</p>
+              <p className="text-xs text-blue-700 mt-1">
+                Use the test admin account: email: admin@example.com, password: admin123
+              </p>
+            </div>
+          </div>
           
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">

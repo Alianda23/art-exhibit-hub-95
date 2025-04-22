@@ -1,7 +1,8 @@
+
 // API service to connect to the Python backend
 
-// Base URL for the API
-const API_URL = 'http://localhost:8000/api';
+// Import the API URL from config
+import { API_URL } from '@/config';
 
 // Interface for auth responses
 interface AuthResponse {
@@ -78,6 +79,12 @@ const storeAuthData = (data: AuthResponse, isAdmin: boolean) => {
       localStorage.setItem('adminId', data.admin_id.toString());
     }
     
+    console.log("Auth data stored successfully:", { 
+      name: data.name, 
+      isAdmin,
+      token: data.token ? `${data.token.substring(0, 20)}...` : null 
+    });
+    
     return true;
   }
   
@@ -87,6 +94,7 @@ const storeAuthData = (data: AuthResponse, isAdmin: boolean) => {
 // Register a new user
 export const registerUser = async (userData: RegisterData): Promise<AuthResponse> => {
   try {
+    console.log("Registering user with:", { ...userData, password: '***' });
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
@@ -101,6 +109,8 @@ export const registerUser = async (userData: RegisterData): Promise<AuthResponse
     
     clearTimeout(timeoutId);
     const data = await response.json();
+    
+    console.log("Registration response:", data);
     
     if (response.ok) {
       storeAuthData(data, false);
@@ -119,6 +129,7 @@ export const registerUser = async (userData: RegisterData): Promise<AuthResponse
 // Login a user
 export const loginUser = async (credentials: LoginData): Promise<AuthResponse> => {
   try {
+    console.log("Attempting to login user:", { email: credentials.email });
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
@@ -133,6 +144,8 @@ export const loginUser = async (credentials: LoginData): Promise<AuthResponse> =
     
     clearTimeout(timeoutId);
     const data = await response.json();
+    
+    console.log("Login response:", response.status, data);
     
     if (response.ok) {
       storeAuthData(data, false);
@@ -151,6 +164,7 @@ export const loginUser = async (credentials: LoginData): Promise<AuthResponse> =
 // Login as admin
 export const loginAdmin = async (credentials: LoginData): Promise<AuthResponse> => {
   try {
+    console.log("Attempting admin login:", { email: credentials.email });
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
@@ -165,6 +179,8 @@ export const loginAdmin = async (credentials: LoginData): Promise<AuthResponse> 
     
     clearTimeout(timeoutId);
     const data = await response.json();
+    
+    console.log("Admin login response:", response.status, data);
     
     if (response.ok) {
       console.log("Admin login successful, storing data:", {
